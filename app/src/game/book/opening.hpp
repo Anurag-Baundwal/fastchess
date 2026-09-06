@@ -12,5 +12,6 @@ struct Opening {
 
     std::string fen_epd            = chess::constants::STARTPOS;
     std::vector<chess::Move> moves = {};
+    std::vector<std::string> duck_moves = {};
 };
 }  // namespace fastchess::book

@@ -16,8 +16,7 @@ namespace fastchess::epd {
 class EpdBuilder {
    public:
     EpdBuilder(const VariantType& variant, const MatchData& match) {
-        chess::Board board = chess::Board();
-        board.set960(variant == VariantType::FRC);
+        rules::Position board(variant);
         board.setFen(match.fen);
 
         for (const auto& move : match.moves) {
@@ -25,7 +24,7 @@ class EpdBuilder {
 
             if (illegal) break;
 
-            board.makeMove<true>(chess::uci::uciToMove(board, move.move));
+            board.play(move.move);
         }
 
         epd = fmt::format("{}\n", board.getEpd());

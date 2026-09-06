@@ -620,6 +620,11 @@ void parseVersion(ArgumentData&) {
     std::exit(0);
 }
 
+void parseVariants(ArgumentData&) {
+    std::cout << "standard\nfischerandom\nduck\n";
+    std::exit(0);
+}
+
 void parseHelp(ArgumentData&) { OptionsParser::printHelp(); }
 
 void parseRecover(ArgumentData& argument_data) { argument_data.tournament_config.recover = true; }
@@ -634,8 +639,10 @@ void parseRepeat(const std::vector<std::string>& params, ArgumentData& argument_
 
 void parseVariant(std::string_view value, ArgumentData& argument_data) {
     std::string val(value);
-    if (val == "fischerandom") argument_data.tournament_config.variant = VariantType::FRC;
-    if (val != "fischerandom" && val != "standard") throw fastchess_exception("Unknown variant.");
+    if (val == "standard") argument_data.tournament_config.variant = VariantType::STANDARD;
+    else if (val == "fischerandom") argument_data.tournament_config.variant = VariantType::FRC;
+    else if (val == "duck") argument_data.tournament_config.variant = VariantType::DUCK;
+    else throw fastchess_exception("Unknown variant.");
 }
 
 void parseTournament(std::string_view value, ArgumentData& argument_data) {
@@ -805,6 +812,8 @@ void OptionsParser::registerOptions() {
     addOption<ParamStyle::Single>("scoreinterval", parseScoreinterval);
     addOption<ParamStyle::Single>("srand", parseSRand);
     addOption<ParamStyle::Single>("seeds", parseSeeds);
+    addOption<ParamStyle::None>("variants", parseVariants);
+    addOption<ParamStyle::None>("-variants", parseVariants);
     addOption<ParamStyle::None>("version", parseVersion);
     addOption<ParamStyle::None>("-version", parseVersion);
     addOption<ParamStyle::None>("v", parseVersion);

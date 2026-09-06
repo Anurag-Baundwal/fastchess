@@ -102,6 +102,10 @@ void validateConfig(config::Tournament& config) {
             int(config.opening.format));
     }
 
+    if (config.variant == VariantType::DUCK && config.tb_adjudication.enabled) {
+        throw fastchess_exception("Error: Syzygy adjudication is not supported for Duck Chess.");
+    }
+
     if (config.tb_adjudication.enabled) {
         if (config.tb_adjudication.syzygy_dirs.empty()) {
             throw fastchess_exception("Error: Must provide a ;-separated list of Syzygy tablebase directories.");

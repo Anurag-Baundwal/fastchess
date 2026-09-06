@@ -61,6 +61,11 @@ PgnBuilder::PgnBuilder(const config::Pgn& pgn_config, const MatchData& match, st
 #endif
     }
 
+    if (match.variant == VariantType::DUCK) {
+        pgn_generator_.addHeader("Variant", "Duck");
+        pgn_generator_.addHeader("VariantRules", "duck1");
+    }
+
     if (!pgn_config_.min) {
         pgn_generator_.addHeader("GameDuration", match_.duration);
         pgn_generator_.addHeader("GameStartTime", match_.start_time);
@@ -92,8 +97,7 @@ PgnBuilder::PgnBuilder(const config::Pgn& pgn_config, const MatchData& match, st
         return;
     }
 
-    chess::Board board = chess::Board();
-    board.set960(is_frc_variant);
+    rules::Position board(match.variant);
     board.setFen(match_.fen);
 
     const std::size_t move_number = int(board.sideToMove() == chess::Color::BLACK) + 2 * board.fullMoveNumber() - 1;
@@ -107,11 +111,11 @@ PgnBuilder::PgnBuilder(const config::Pgn& pgn_config, const MatchData& match, st
 
         const auto last     = std::next(it) == match_.moves.end() || next_illegal;
         const auto move_str = moveNotation(board, it->move);
-        const auto cmt_str  = createComment(*it, *std::next(it), next_illegal, last);
+        const auto cmt_str  = createComment(*it, next_illegal ? *std::next(it) : *it, next_illegal, last);
 
         pgn_generator_.addMove(move_str, cmt_str);
 
-        board.makeMove<true>(chess::uci::uciToMove(board, it->move));
+        board.play(it->move);
 
         if (next_illegal) {
             break;
@@ -120,6 +124,8 @@ PgnBuilder::PgnBuilder(const config::Pgn& pgn_config, const MatchData& match, st
 }
 
 std::optional<Opening> PgnBuilder::getOpeningClassification(bool is_frc_variant) const {
+    if (match_.variant == VariantType::DUCK) return std::nullopt;
+
     chess::Board opening_board;
     opening_board.set960(is_frc_variant);
     opening_board.setFen(match_.fen);
@@ -148,15 +154,8 @@ std::optional<Opening> PgnBuilder::getOpeningClassification(bool is_frc_variant)
     return current_opening;
 }
 
-std::string PgnBuilder::moveNotation(chess::Board& board, const std::string& move) const noexcept {
-    switch (pgn_config_.notation) {
-        case NotationType::SAN:
-            return chess::uci::moveToSan(board, chess::uci::uciToMove(board, move));
-        case NotationType::LAN:
-            return chess::uci::moveToLan(board, chess::uci::uciToMove(board, move));
-        default:
-            return move;
-    }
+std::string PgnBuilder::moveNotation(rules::Position& board, const std::string& move) const {
+    return board.notation(move, pgn_config_.notation);
 }
 
 std::string PgnBuilder::createComment(const MoveData& move, const MoveData& next_move, bool illegal,

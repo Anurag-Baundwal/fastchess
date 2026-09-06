@@ -1,4 +1,5 @@
 #include <engine/uci_engine.hpp>
+#include <game/variant/position.hpp>
 
 #include <algorithm>
 #include <condition_variable>
@@ -356,6 +357,18 @@ bool UciEngine::refreshUci() {
         }
     }
 
+    if (config_.variant == VariantType::DUCK) {
+        const auto variant = uci_options_.getOption("UCI_Variant");
+        if (variant.has_value()) {
+            if (!variant.value()->isValid("duck")) {
+                Logger::print<Logger::Level::WARN>("Engine {} does not support UCI_Variant duck", config_.name);
+                return false;
+            }
+            sendSetoption("UCI_Variant", "duck");
+        }
+        if (uci_options_.getOption("UCI_Chess960").has_value()) sendSetoption("UCI_Chess960", "false");
+    }
+
     if (config_.variant == VariantType::FRC) {
         try {
             sendSetoption("UCI_Chess960", "true");
@@ -548,7 +561,7 @@ UciInfo UciEngine::parseInfo(std::string_view info_line) {
         } else if (token == "upperbound") {
             result.upperbound = true;
         } else if (token == "pv") {
-            for (++i; i < tokens.size() && chess::uci::isUciMove(tokens[i]); ++i) result.pv.push_back(tokens[i]);
+            for (++i; i < tokens.size() && (chess::uci::isUciMove(tokens[i]) || rules::DuckPosition::parseTurn(tokens[i]).has_value()); ++i) result.pv.push_back(tokens[i]);
             break;
         }
     }

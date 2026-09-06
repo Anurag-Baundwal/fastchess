@@ -8,6 +8,7 @@
 
 #include <core/logger/logger.hpp>
 #include <game/book/opening.hpp>
+#include <game/variant/position.hpp>
 #include <types/exception.hpp>
 
 #ifdef USE_ZLIB
@@ -18,10 +19,9 @@ namespace fastchess::book {
 
 class PGNVisitor : public chess::pgn::Visitor {
    public:
-    PGNVisitor(std::vector<Opening>& pgns, int plies_limit, bool is_frc)
-        : pgns_(pgns), plies_limit_(plies_limit), is_frc_(is_frc) {
-        board_.set960(is_frc_);
-    }
+    PGNVisitor(std::vector<Opening>& pgns, int plies_limit, bool is_frc, bool is_duck)
+        : pgns_(pgns), board_(is_duck ? VariantType::DUCK : is_frc ? VariantType::FRC : VariantType::STANDARD),
+          plies_limit_(plies_limit) {}
     virtual ~PGNVisitor() {}
 
     void startPgn() override {
@@ -29,34 +29,53 @@ class PGNVisitor : public chess::pgn::Visitor {
 
         pgn_.fen_epd = chess::constants::STARTPOS;
         pgn_.moves.clear();
+        pgn_.duck_moves.clear();
         ply_count_  = 0;
         early_stop_ = false;
     }
 
     void header(std::string_view key, std::string_view value) override {
+        if (key == "Variant") {
+            const bool duck = value == "Duck" || value == "duck" || value == "Duck Chess";
+            if (duck != board_.isDuck()) throw fastchess_exception("PGN variant does not match selected variant");
+        }
         if (key == "FEN") {
-            board_.setFen(value);
+            if (!board_.setFen(value)) throw fastchess_exception("Invalid FEN in PGN opening book");
             pgn_.fen_epd = value;
         }
     }
 
-    void startMoves() override {}
+    void startMoves() override {
+        if (board_.isDuck() && board_.isGameOver().second != chess::GameResult::NONE)
+            throw fastchess_exception("Terminal Duck Chess opening position");
+    }
 
     void move(std::string_view move, std::string_view) override {
         if (early_stop_) return;
         if (ply_count_++ >= plies_limit_ && plies_limit_ != -1) return;
 
+        if (board_.isDuck()) {
+            const auto turn = board_.parseNotation(move);
+            board_.play(turn);
+            if (board_.isGameOver().second != chess::GameResult::NONE) {
+                early_stop_ = true;
+                return;
+            }
+            pgn_.duck_moves.push_back(turn);
+            return;
+        }
+
         chess::Move move_i;
 
         try {
-            move_i = chess::uci::parseSan(board_, move);
+            move_i = chess::uci::parseSan(board_.orthodox(), move);
         } catch (const chess::uci::SanParseError& e) {
             LOG_ERR("Failed to parse move: {}", e.what());
             early_stop_ = true;
             return;
         }
 
-        board_.makeMove<true>(move_i);
+        board_.orthodox().makeMove<true>(move_i);
 
         if (board_.isGameOver().second != chess::GameResult::NONE) {
             early_stop_ = true;
@@ -71,16 +90,15 @@ class PGNVisitor : public chess::pgn::Visitor {
    private:
     std::vector<Opening>& pgns_;
     Opening pgn_;
-    chess::Board board_;
+    rules::Position board_;
     const int plies_limit_;
     int ply_count_   = 0;
-    bool is_frc_     = false;
     bool early_stop_ = false;
 };
 
-PgnReader::PgnReader(const std::string& pgn_file_path, int plies_limit, bool is_frc)
+PgnReader::PgnReader(const std::string& pgn_file_path, int plies_limit, bool is_frc, bool is_duck)
     : file_name_(pgn_file_path), plies_limit_(plies_limit) {
-    auto vis        = std::make_unique<PGNVisitor>(pgns_, plies_limit_, is_frc);
+    auto vis        = std::make_unique<PGNVisitor>(pgns_, plies_limit_, is_frc, is_duck);
     bool is_gzipped = file_name_.size() >= 3 && file_name_.substr(file_name_.size() - 3) == ".gz";
 
     std::unique_ptr<std::istream> input_stream;
@@ -104,7 +122,9 @@ PgnReader::PgnReader(const std::string& pgn_file_path, int plies_limit, bool is_
     }
 
     chess::pgn::StreamParser parser(*input_stream);
-    parser.readGames(*vis);
+    const auto error = parser.readGames(*vis);
+    if (is_duck && error != chess::pgn::StreamParserError::None)
+        throw fastchess_exception("Malformed Duck Chess PGN opening book");
     if (pgns_.empty()) {
         throw fastchess_exception::format("No openings found in file: {}", file_name_);
     }
