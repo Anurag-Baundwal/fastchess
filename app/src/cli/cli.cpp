@@ -621,7 +621,7 @@ void parseVersion(ArgumentData&) {
 }
 
 void parseVariants(ArgumentData&) {
-    std::cout << "standard\nfischerandom\nduck\n";
+    std::cout << "standard\nfischerandom\nduck\nduck960\n";
     std::exit(0);
 }
 
@@ -642,6 +642,7 @@ void parseVariant(std::string_view value, ArgumentData& argument_data) {
     if (val == "standard") argument_data.tournament_config.variant = VariantType::STANDARD;
     else if (val == "fischerandom") argument_data.tournament_config.variant = VariantType::FRC;
     else if (val == "duck") argument_data.tournament_config.variant = VariantType::DUCK;
+    else if (val == "duck960") argument_data.tournament_config.variant = VariantType::DUCK960;
     else throw fastchess_exception("Unknown variant.");
 }
 

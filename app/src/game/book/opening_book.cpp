@@ -30,7 +30,7 @@ void OpeningBook::setup(const std::string& file, FormatType type, VariantType vt
     }
 
     if (type == FormatType::PGN) {
-        openings_.emplace<PgnReader>(file, plies_, vt == VariantType::FRC, vt == VariantType::DUCK);
+        openings_.emplace<PgnReader>(file, plies_, vt == VariantType::FRC || vt == VariantType::DUCK960, vt == VariantType::DUCK || vt == VariantType::DUCK960);
     } else if (type == FormatType::EPD) {
         openings_.emplace<EpdReader>(file);
     }

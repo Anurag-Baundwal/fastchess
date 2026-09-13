@@ -86,7 +86,7 @@ void validateConfig(config::Tournament& config) {
                       config.report_penta);
     }
 
-    if (config.variant == VariantType::FRC && config.opening.file.empty()) {
+    if ((config.variant == VariantType::FRC || config.variant == VariantType::DUCK960) && config.opening.file.empty()) {
         throw fastchess_exception("Error: Please specify a Chess960 opening book");
     }
 
@@ -102,7 +102,7 @@ void validateConfig(config::Tournament& config) {
             int(config.opening.format));
     }
 
-    if (config.variant == VariantType::DUCK && config.tb_adjudication.enabled) {
+    if ((config.variant == VariantType::DUCK || config.variant == VariantType::DUCK960) && config.tb_adjudication.enabled) {
         throw fastchess_exception("Error: Syzygy adjudication is not supported for Duck Chess.");
     }
 

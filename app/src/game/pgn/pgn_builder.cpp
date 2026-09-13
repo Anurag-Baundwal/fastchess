@@ -48,7 +48,7 @@ PgnBuilder::PgnBuilder(const config::Pgn& pgn_config, const MatchData& match, st
         }
     }
 
-    if (match_.fen != chess::constants::STARTPOS || is_frc_variant) {
+    if (match_.fen != chess::constants::STARTPOS || is_frc_variant || match.variant == VariantType::DUCK960) {
         pgn_generator_.addHeader("SetUp", "1");
         pgn_generator_.addHeader("FEN", match_.fen);
     }
@@ -61,8 +61,8 @@ PgnBuilder::PgnBuilder(const config::Pgn& pgn_config, const MatchData& match, st
 #endif
     }
 
-    if (match.variant == VariantType::DUCK) {
-        pgn_generator_.addHeader("Variant", "Duck");
+    if (match.variant == VariantType::DUCK || match.variant == VariantType::DUCK960) {
+        pgn_generator_.addHeader("Variant", match.variant == VariantType::DUCK960 ? "Duck960" : "Duck");
         pgn_generator_.addHeader("VariantRules", "duck1");
     }
 
@@ -124,7 +124,7 @@ PgnBuilder::PgnBuilder(const config::Pgn& pgn_config, const MatchData& match, st
 }
 
 std::optional<Opening> PgnBuilder::getOpeningClassification(bool is_frc_variant) const {
-    if (match_.variant == VariantType::DUCK) return std::nullopt;
+    if (match_.variant == VariantType::DUCK || match_.variant == VariantType::DUCK960) return std::nullopt;
 
     chess::Board opening_board;
     opening_board.set960(is_frc_variant);

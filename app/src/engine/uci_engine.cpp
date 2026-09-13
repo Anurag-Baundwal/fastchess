@@ -357,7 +357,7 @@ bool UciEngine::refreshUci() {
         }
     }
 
-    if (config_.variant == VariantType::DUCK) {
+    if (config_.variant == VariantType::DUCK || config_.variant == VariantType::DUCK960) {
         const auto variant = uci_options_.getOption("UCI_Variant");
         if (variant.has_value()) {
             if (!variant.value()->isValid("duck")) {
@@ -366,7 +366,7 @@ bool UciEngine::refreshUci() {
             }
             sendSetoption("UCI_Variant", "duck");
         }
-        if (uci_options_.getOption("UCI_Chess960").has_value()) sendSetoption("UCI_Chess960", "false");
+        if (uci_options_.getOption("UCI_Chess960").has_value()) sendSetoption("UCI_Chess960", config_.variant == VariantType::DUCK960 ? "true" : "false");
     }
 
     if (config_.variant == VariantType::FRC) {

@@ -19,7 +19,7 @@ struct DuckTurn {
 
 class DuckPosition {
    public:
-    DuckPosition();
+    explicit DuckPosition(bool chess960 = false);
     bool setFen(std::string_view fen);
     bool setEpd(std::string_view epd);
     std::string getFen(bool counters = true) const;
@@ -37,6 +37,7 @@ class DuckPosition {
     std::pair<chess::GameResultReason, chess::GameResult> isGameOver() const;
 
    private:
+    int castlingIndex(const DuckTurn& move) const;
     bool pieceLegal(const DuckTurn& move) const;
     void applyPiece(const DuckTurn& move);
     bool kingCaptured(const DuckTurn& move) const;
@@ -48,6 +49,8 @@ class DuckPosition {
     int duck_ = -1;
     int ep_ = -1;
     int rights_ = 0;
+    std::array<int, 4> rooks_{7, 0, 63, 56};
+    bool chess960_ = false;
     int halfmove_ = 0;
     int fullmove_ = 1;
     std::vector<std::string> history_;
@@ -57,9 +60,9 @@ class Position {
    public:
     explicit Position(VariantType variant = VariantType::STANDARD) : variant_(variant) {
         chess_.set960(variant == VariantType::FRC);
-        if (isDuck()) duck_.emplace();
+        if (isDuck()) duck_.emplace(variant == VariantType::DUCK960);
     }
-    bool isDuck() const { return variant_ == VariantType::DUCK; }
+    bool isDuck() const { return variant_ == VariantType::DUCK || variant_ == VariantType::DUCK960; }
     bool setFen(std::string_view fen) { return isDuck() ? duck_->setFen(fen) : chess_.setFen(fen); }
     bool setEpd(std::string_view epd) { return isDuck() ? duck_->setEpd(epd) : chess_.setEpd(epd); }
     std::string getFen() const { return isDuck() ? duck_->getFen() : chess_.getFen(); }

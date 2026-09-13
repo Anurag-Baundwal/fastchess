@@ -20,8 +20,8 @@ namespace fastchess::book {
 class PGNVisitor : public chess::pgn::Visitor {
    public:
     PGNVisitor(std::vector<Opening>& pgns, int plies_limit, bool is_frc, bool is_duck)
-        : pgns_(pgns), board_(is_duck ? VariantType::DUCK : is_frc ? VariantType::FRC : VariantType::STANDARD),
-          plies_limit_(plies_limit) {}
+        : pgns_(pgns), board_(is_duck ? (is_frc ? VariantType::DUCK960 : VariantType::DUCK) : is_frc ? VariantType::FRC : VariantType::STANDARD),
+          plies_limit_(plies_limit), duck960_(is_duck && is_frc) {}
     virtual ~PGNVisitor() {}
 
     void startPgn() override {
@@ -36,7 +36,9 @@ class PGNVisitor : public chess::pgn::Visitor {
 
     void header(std::string_view key, std::string_view value) override {
         if (key == "Variant") {
-            const bool duck = value == "Duck" || value == "duck" || value == "Duck Chess";
+            const bool duck960 = value == "Duck960" || value == "duck960";
+            const bool duck = duck960 || value == "Duck" || value == "duck" || value == "Duck Chess";
+            if (duck && duck960 != duck960_) throw fastchess_exception("PGN variant does not match selected variant");
             if (duck != board_.isDuck()) throw fastchess_exception("PGN variant does not match selected variant");
         }
         if (key == "FEN") {
@@ -93,6 +95,7 @@ class PGNVisitor : public chess::pgn::Visitor {
     rules::Position board_;
     const int plies_limit_;
     int ply_count_   = 0;
+    bool duck960_ = false;
     bool early_stop_ = false;
 };
 

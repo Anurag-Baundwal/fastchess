@@ -29,7 +29,7 @@ bool number(std::string_view s, int& value, int minimum) {
 }
 }
 
-DuckPosition::DuckPosition() { setFen(chess::constants::STARTPOS); }
+DuckPosition::DuckPosition(bool chess960) : chess960_(chess960) { setFen(chess::constants::STARTPOS); }
 
 bool DuckPosition::setFen(std::string_view fen) {
     std::istringstream input{std::string(fen)};
@@ -63,18 +63,36 @@ bool DuckPosition::setFen(std::string_view fen) {
     if (rank != 0 || file != 8 || white_kings > 1 || black_kings > 1 || white_kings + black_kings == 0) return false;
     if (fields[1] != "w" && fields[1] != "b") return false;
     int rights = 0;
+    std::array<int, 4> rooks{7, 0, 63, 56};
     if (fields[2] != "-") {
         if (fields[2].empty()) return false;
         for (char c : fields[2]) {
-            const auto bit = std::string_view("KQkq").find(c);
-            if (bit == std::string_view::npos || (rights & (1 << bit))) return false;
+            int bit = -1;
+            if (chess960_) {
+                const bool white = whitePiece(c);
+                const int base = white ? 0 : 56;
+                const auto king = std::find(board.begin() + base, board.begin() + base + 8, white ? 'K' : 'k');
+                if (king == board.begin() + base + 8) return false;
+                const int king_file = int(king - board.begin()) % 8;
+                int rook_file = -1;
+                if (lower(c) == 'k') {
+                    for (int f = 7; f > king_file; --f) if (board[base + f] == (white ? 'R' : 'r')) { rook_file = f; break; }
+                } else if (lower(c) == 'q') {
+                    for (int f = 0; f < king_file; ++f) if (board[base + f] == (white ? 'R' : 'r')) { rook_file = f; break; }
+                } else if (lower(c) >= 'a' && lower(c) <= 'h') rook_file = lower(c) - 'a';
+                if (rook_file < 0 || rook_file == king_file || board[base + rook_file] != (white ? 'R' : 'r')) return false;
+                bit = (white ? 0 : 2) + (rook_file < king_file);
+                rooks[bit] = base + rook_file;
+            } else {
+                const auto index = std::string_view("KQkq").find(c);
+                if (index == std::string_view::npos) return false;
+                bit = int(index);
+                if (board[bit < 2 ? 4 : 60] != (bit < 2 ? 'K' : 'k') || board[rooks[bit]] != (bit < 2 ? 'R' : 'r')) return false;
+            }
+            if (rights & (1 << bit)) return false;
             rights |= 1 << bit;
         }
     }
-    if ((rights & 1) && (board[4] != 'K' || board[7] != 'R')) return false;
-    if ((rights & 2) && (board[4] != 'K' || board[0] != 'R')) return false;
-    if ((rights & 4) && (board[60] != 'k' || board[63] != 'r')) return false;
-    if ((rights & 8) && (board[60] != 'k' || board[56] != 'r')) return false;
     const bool white = fields[1] == "w";
     int ep = -1, halfmove = 0, fullmove = 1;
     if (fields[3] != "-") {
@@ -87,6 +105,7 @@ bool DuckPosition::setFen(std::string_view fen) {
     duck_ = duck;
     white_ = white;
     rights_ = rights;
+    rooks_ = rooks;
     ep_ = ep;
     halfmove_ = halfmove;
     fullmove_ = fullmove;
@@ -129,7 +148,7 @@ std::string DuckPosition::getFen(bool counters) const {
     }
     fen += white_ ? " w " : " b ";
     if (!rights_) fen += '-';
-    for (int i = 0; i < 4; ++i) if (rights_ & (1 << i)) fen += "KQkq"[i];
+    for (int i = 0; i < 4; ++i) if (rights_ & (1 << i)) fen += chess960_ ? char((i < 2 ? 'A' : 'a') + rooks_[i] % 8) : "KQkq"[i];
     fen += " " + (ep_ == -1 ? std::string("-") : squareName(ep_));
     if (counters) fen += " " + std::to_string(halfmove_) + " " + std::to_string(fullmove_);
     return fen;
@@ -167,10 +186,32 @@ std::string DuckPosition::toUci(const DuckTurn& move) {
     return result;
 }
 
+int DuckPosition::castlingIndex(const DuckTurn& move) const {
+    if (move.from < 0 || move.from >= 64 || squares_[move.from] != (white_ ? 'K' : 'k')) return -1;
+    const int base = white_ ? 0 : 56;
+    if (move.from / 8 != base / 8) return -1;
+    for (int i = white_ ? 0 : 2; i < (white_ ? 2 : 4); ++i) {
+        if ((rights_ & (1 << i)) && move.to == (chess960_ ? rooks_[i] : base + (i % 2 ? 2 : 6))) return i;
+    }
+    return -1;
+}
+
 bool DuckPosition::pieceLegal(const DuckTurn& move) const {
     const int from = move.from, to = move.to;
     if (from < 0 || from >= 64 || to < 0 || to >= 64 || from == to || to == duck_) return false;
     const char p = squares_[from], target = squares_[to];
+    const int castle = castlingIndex(move);
+    if (castle >= 0) {
+        if (move.promotion || squares_[rooks_[castle]] != (white_ ? 'R' : 'r')) return false;
+        const int base = white_ ? 0 : 56;
+        const int king_to = base + (castle % 2 ? 2 : 6), rook_to = base + (castle % 2 ? 3 : 5);
+        const auto clear = [&](int start, int end) {
+            for (int sq = std::min(start, end); sq <= std::max(start, end); ++sq)
+                if (sq == duck_ || (sq != from && sq != rooks_[castle] && squares_[sq])) return false;
+            return true;
+        };
+        return clear(from, king_to) && clear(rooks_[castle], rook_to);
+    }
     if (!p || whitePiece(p) != white_ || (target && whitePiece(target) == white_)) return false;
     const char type = lower(p);
     const bool promotion = type == 'p' && to / 8 == (white_ ? 7 : 0);
@@ -185,18 +226,7 @@ bool DuckPosition::pieceLegal(const DuckTurn& move) const {
         return dy == 2 * dir && from / 8 == (white_ ? 1 : 6) && !squares_[from + 8 * dir] && from + 8 * dir != duck_;
     }
     if (type == 'n') return ax * ay == 2;
-    if (type == 'k') {
-        if (std::max(ax, ay) == 1) return true;
-        const int home = white_ ? 4 : 60;
-        if (from != home || dy || ax != 2) return false;
-        const bool kingside = dx > 0;
-        const int right = (white_ ? 1 : 4) * (kingside ? 1 : 2);
-        const int rook = home + (kingside ? 3 : -4);
-        if (!(rights_ & right) || squares_[rook] != (white_ ? 'R' : 'r')) return false;
-        const int step = kingside ? 1 : -1;
-        for (int sq = home + step; sq != rook; sq += step) if (squares_[sq] || sq == duck_) return false;
-        return true;
-    }
+    if (type == 'k') return std::max(ax, ay) == 1;
     const bool diagonal = ax == ay;
     const bool straight = dx == 0 || dy == 0;
     if ((type == 'b' && !diagonal) || (type == 'r' && !straight) || (type == 'q' && !diagonal && !straight)) return false;
@@ -208,20 +238,27 @@ bool DuckPosition::pieceLegal(const DuckTurn& move) const {
 bool DuckPosition::kingCaptured(const DuckTurn& move) const { return lower(squares_[move.to]) == 'k'; }
 
 void DuckPosition::applyPiece(const DuckTurn& move) {
+    const int castle = castlingIndex(move);
+    if (castle >= 0) {
+        const int base = white_ ? 0 : 56;
+        squares_[move.from] = 0;
+        squares_[rooks_[castle]] = 0;
+        squares_[base + (castle % 2 ? 2 : 6)] = white_ ? 'K' : 'k';
+        squares_[base + (castle % 2 ? 3 : 5)] = white_ ? 'R' : 'r';
+        rights_ &= white_ ? ~3 : ~12;
+        ep_ = -1;
+        ++halfmove_;
+        return;
+    }
     const char piece = squares_[move.from], target = squares_[move.to];
     const bool pawn = lower(piece) == 'p';
     const int dir = white_ ? 8 : -8;
     if (pawn && move.to == ep_ && !target && move.from % 8 != move.to % 8) squares_[move.to - dir] = 0;
     if (lower(piece) == 'k') {
         rights_ &= white_ ? ~3 : ~12;
-        if (std::abs(move.to - move.from) == 2) {
-            const int rook = move.from + (move.to > move.from ? 3 : -4);
-            squares_[(move.from + move.to) / 2] = squares_[rook];
-            squares_[rook] = 0;
-        }
     }
     for (int i = 0; i < 4; ++i) {
-        const int rook = std::array<int, 4>{7, 0, 63, 56}[i];
+        const int rook = rooks_[i];
         if (move.from == rook || move.to == rook) rights_ &= ~(1 << i);
     }
     if (lower(target) == 'k') rights_ &= white_ ? ~12 : ~3;
@@ -237,12 +274,14 @@ bool DuckPosition::isLegal(const DuckTurn& move) const {
         std::find(squares_.begin(), squares_.end(), 'k') == squares_.end()) return false;
     if (move.duck == -1) return kingCaptured(move);
     if (move.duck < 0 || move.duck >= 64 || move.duck == duck_) return false;
+    const int castle = castlingIndex(move);
+    if (castle >= 0) {
+        const int base = white_ ? 0 : 56;
+        if (move.duck == base + (castle % 2 ? 2 : 6) || move.duck == base + (castle % 2 ? 3 : 5)) return false;
+        return move.duck == move.from || move.duck == rooks_[castle] || !squares_[move.duck];
+    }
     if (move.duck == move.from) return true;
     if (move.duck == move.to) return false;
-    if (lower(squares_[move.from]) == 'k' && std::abs(move.to - move.from) == 2) {
-        if (move.duck == (move.from + move.to) / 2) return false;
-        if (move.duck == move.from + (move.to > move.from ? 3 : -4)) return true;
-    }
     if (lower(squares_[move.from]) == 'p' && move.to == ep_ && !squares_[move.to] &&
         move.from % 8 != move.to % 8 && move.duck == move.to + (white_ ? -8 : 8)) return true;
     return !squares_[move.duck];
@@ -301,8 +340,9 @@ std::pair<chess::GameResultReason, chess::GameResult> DuckPosition::isGameOver()
 std::string DuckPosition::san(const DuckTurn& move, bool long_notation) const {
     const char type = lower(squares_[move.from]);
     std::string result;
-    if (type == 'k' && std::abs(move.from - move.to) == 2) {
-        result = move.to > move.from ? "O-O" : "O-O-O";
+    const int castle = castlingIndex(move);
+    if (castle >= 0) {
+        result = castle % 2 ? "O-O-O" : "O-O";
     } else {
         const bool capture = squares_[move.to] || (type == 'p' && move.from % 8 != move.to % 8);
         if (type != 'p') result += char(std::toupper(type));
