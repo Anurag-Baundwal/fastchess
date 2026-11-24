@@ -29,9 +29,21 @@ bool number(std::string_view s, int& value, int minimum) {
 }
 }
 
-DuckPosition::DuckPosition(bool chess960) : chess960_(chess960) { setFen(chess::constants::STARTPOS); }
+KingCapturePosition::KingCapturePosition(VariantType variant)
+    : chess960_(variant == VariantType::DUCK960), secret_queen_(variant == VariantType::SECRETQUEEN) {
+    setFen(chess::constants::STARTPOS);
+}
 
-bool DuckPosition::setFen(std::string_view fen) {
+bool KingCapturePosition::setSecretQueen(chess::Color side, std::string_view name) {
+    const int sq = square(name);
+    if (!secret_queen_ || sq < 0 || side == chess::Color::NONE ||
+        squares_[sq] != (side == chess::Color::WHITE ? 'P' : 'p')) return false;
+    queens_[int(side)] = sq;
+    history_.assign(1, repetitionKey());
+    return true;
+}
+
+bool KingCapturePosition::setFen(std::string_view fen) {
     std::istringstream input{std::string(fen)};
     std::vector<std::string> fields;
     for (std::string s; input >> s;) fields.push_back(s);
@@ -50,7 +62,7 @@ bool DuckPosition::setFen(std::string_view fen) {
             if (file >= 8 || std::string_view("PNBRQKpnbrqk*").find(c) == std::string_view::npos) return false;
             const int sq = rank * 8 + file++;
             if (c == '*') {
-                if (duck != -1) return false;
+                if (secret_queen_ || duck != -1) return false;
                 duck = sq;
             } else {
                 if (lower(c) == 'p' && (rank == 0 || rank == 7)) return false;
@@ -102,6 +114,7 @@ bool DuckPosition::setFen(std::string_view fen) {
     }
     if (fields.size() == 6 && (!number(fields[4], halfmove, 0) || !number(fields[5], fullmove, 1))) return false;
     squares_ = board;
+    queens_ = {-1, -1};
     duck_ = duck;
     white_ = white;
     rights_ = rights;
@@ -114,7 +127,7 @@ bool DuckPosition::setFen(std::string_view fen) {
     return true;
 }
 
-bool DuckPosition::setEpd(std::string_view epd) {
+bool KingCapturePosition::setEpd(std::string_view epd) {
     std::istringstream input{std::string(epd)};
     std::string placement, side, rights, ep;
     if (!(input >> placement >> side >> rights >> ep)) return false;
@@ -132,7 +145,7 @@ bool DuckPosition::setEpd(std::string_view epd) {
     return setFen(placement + " " + side + " " + rights + " " + ep + " " + std::to_string(halfmove) + " " + std::to_string(fullmove));
 }
 
-std::string DuckPosition::getFen(bool counters) const {
+std::string KingCapturePosition::getFen(bool counters) const {
     std::string fen;
     for (int rank = 7; rank >= 0; --rank) {
         int empty = 0;
@@ -154,15 +167,15 @@ std::string DuckPosition::getFen(bool counters) const {
     return fen;
 }
 
-std::string DuckPosition::getEpd() const {
+std::string KingCapturePosition::getEpd() const {
     return getFen(false) + " hmvc " + std::to_string(halfmove_) + "; fmvn " + std::to_string(fullmove_) + ";";
 }
 
-std::optional<DuckTurn> DuckPosition::parseTurn(std::string_view move) {
+std::optional<VariantMove> KingCapturePosition::parseTurn(std::string_view move) {
     const auto comma = move.find(',');
     const auto piece = move.substr(0, comma);
     if (piece.size() != 4 && piece.size() != 5) return std::nullopt;
-    DuckTurn turn;
+    VariantMove turn;
     turn.from = square(piece.substr(0, 2));
     turn.to = square(piece.substr(2, 2));
     if (turn.from < 0 || turn.to < 0 || turn.from == turn.to) return std::nullopt;
@@ -179,14 +192,14 @@ std::optional<DuckTurn> DuckPosition::parseTurn(std::string_view move) {
     return turn;
 }
 
-std::string DuckPosition::toUci(const DuckTurn& move) {
+std::string KingCapturePosition::toUci(const VariantMove& move) {
     std::string result = squareName(move.from) + squareName(move.to);
     if (move.promotion) result += move.promotion;
     if (move.duck >= 0) result += "," + squareName(move.to) + squareName(move.duck);
     return result;
 }
 
-int DuckPosition::castlingIndex(const DuckTurn& move) const {
+int KingCapturePosition::castlingIndex(const VariantMove& move) const {
     if (move.from < 0 || move.from >= 64 || squares_[move.from] != (white_ ? 'K' : 'k')) return -1;
     const int base = white_ ? 0 : 56;
     if (move.from / 8 != base / 8) return -1;
@@ -196,7 +209,7 @@ int DuckPosition::castlingIndex(const DuckTurn& move) const {
     return -1;
 }
 
-bool DuckPosition::pieceLegal(const DuckTurn& move) const {
+bool KingCapturePosition::pieceLegal(const VariantMove& move) const {
     const int from = move.from, to = move.to;
     if (from < 0 || from >= 64 || to < 0 || to >= 64 || from == to || to == duck_) return false;
     const char p = squares_[from], target = squares_[to];
@@ -213,18 +226,17 @@ bool DuckPosition::pieceLegal(const DuckTurn& move) const {
         return clear(from, king_to) && clear(rooks_[castle], rook_to);
     }
     if (!p || whitePiece(p) != white_ || (target && whitePiece(target) == white_)) return false;
-    const char type = lower(p);
+    const bool secret = secret_queen_ && from == queens_[white_ ? 0 : 1];
+    const char type = secret ? 'q' : lower(p);
     const bool promotion = type == 'p' && to / 8 == (white_ ? 7 : 0);
-    if (promotion != bool(move.promotion) || (promotion && std::string_view("nbrq").find(move.promotion) == std::string_view::npos)) return false;
+    if (secret) {
+        if (move.promotion && (move.promotion != 'q' || to / 8 != (white_ ? 7 : 0))) return false;
+    } else if (promotion != bool(move.promotion) ||
+               (promotion && std::string_view("nbrq").find(move.promotion) == std::string_view::npos)) return false;
     const int dx = to % 8 - from % 8, dy = to / 8 - from / 8;
     const int ax = std::abs(dx), ay = std::abs(dy);
-    if (type == 'p') {
-        const int dir = white_ ? 1 : -1;
-        if (ax == 1 && dy == dir) return target || (to == ep_ && squares_[to - 8 * dir] == (white_ ? 'p' : 'P'));
-        if (dx || target) return false;
-        if (dy == dir) return true;
-        return dy == 2 * dir && from / 8 == (white_ ? 1 : 6) && !squares_[from + 8 * dir] && from + 8 * dir != duck_;
-    }
+    if (type == 'p') return pawnMove(move);
+    if (secret && pawnMove(move)) return true;
     if (type == 'n') return ax * ay == 2;
     if (type == 'k') return std::max(ax, ay) == 1;
     const bool diagonal = ax == ay;
@@ -235,9 +247,21 @@ bool DuckPosition::pieceLegal(const DuckTurn& move) const {
     return true;
 }
 
-bool DuckPosition::kingCaptured(const DuckTurn& move) const { return lower(squares_[move.to]) == 'k'; }
+bool KingCapturePosition::pawnMove(const VariantMove& move) const {
+    const int from = move.from, to = move.to;
+    const int dx = to % 8 - from % 8, dy = to / 8 - from / 8;
+    const int dir = white_ ? 1 : -1;
+    if (std::abs(dx) == 1 && dy == dir)
+        return squares_[to] || (to == ep_ && squares_[to - 8 * dir] == (white_ ? 'p' : 'P'));
+    if (dx || squares_[to]) return false;
+    if (dy == dir) return true;
+    return dy == 2 * dir && from / 8 == (white_ ? 1 : 6) &&
+           !squares_[from + 8 * dir] && from + 8 * dir != duck_;
+}
 
-void DuckPosition::applyPiece(const DuckTurn& move) {
+bool KingCapturePosition::kingCaptured(const VariantMove& move) const { return lower(squares_[move.to]) == 'k'; }
+
+void KingCapturePosition::applyPiece(const VariantMove& move) {
     const int castle = castlingIndex(move);
     if (castle >= 0) {
         const int base = white_ ? 0 : 56;
@@ -253,7 +277,12 @@ void DuckPosition::applyPiece(const DuckTurn& move) {
     const char piece = squares_[move.from], target = squares_[move.to];
     const bool pawn = lower(piece) == 'p';
     const int dir = white_ ? 8 : -8;
-    if (pawn && move.to == ep_ && !target && move.from % 8 != move.to % 8) squares_[move.to - dir] = 0;
+    const int captured = pawn && move.to == ep_ && !target && move.from % 8 != move.to % 8 ? move.to - dir : move.to;
+    if (captured != move.to) squares_[captured] = 0;
+    if (secret_queen_) {
+        if (queens_[white_ ? 1 : 0] == captured) queens_[white_ ? 1 : 0] = -1;
+        if (queens_[white_ ? 0 : 1] == move.from) queens_[white_ ? 0 : 1] = move.to;
+    }
     if (lower(piece) == 'k') {
         rights_ &= white_ ? ~3 : ~12;
     }
@@ -268,10 +297,11 @@ void DuckPosition::applyPiece(const DuckTurn& move) {
     halfmove_ = pawn || target ? 0 : halfmove_ + 1;
 }
 
-bool DuckPosition::isLegal(const DuckTurn& move) const {
+bool KingCapturePosition::isLegal(const VariantMove& move) const {
     if (!pieceLegal(move)) return false;
     if (std::find(squares_.begin(), squares_.end(), 'K') == squares_.end() ||
         std::find(squares_.begin(), squares_.end(), 'k') == squares_.end()) return false;
+    if (secret_queen_) return move.duck == -1;
     if (move.duck == -1) return kingCaptured(move);
     if (move.duck < 0 || move.duck >= 64 || move.duck == duck_) return false;
     const int castle = castlingIndex(move);
@@ -287,14 +317,19 @@ bool DuckPosition::isLegal(const DuckTurn& move) const {
     return !squares_[move.duck];
 }
 
-bool DuckPosition::isLegal(std::string_view move) const {
+bool KingCapturePosition::isLegal(std::string_view move) const {
     const auto parsed = parseTurn(move);
     return parsed && isLegal(*parsed);
 }
 
-void DuckPosition::play(std::string_view move) {
+void KingCapturePosition::play(std::string_view move) {
     const auto parsed = parseTurn(move);
-    if (!parsed || !isLegal(*parsed)) throw std::invalid_argument("Illegal Duck Chess turn: " + std::string(move));
+    if (!parsed || !isLegal(*parsed)) throw std::invalid_argument("Illegal variant move: " + std::string(move));
+    if (secret_queen_ && parsed->from == queens_[white_ ? 0 : 1] &&
+        (!pawnMove(*parsed) || parsed->to / 8 == (white_ ? 7 : 0))) {
+        squares_[parsed->from] = white_ ? 'Q' : 'q';
+        queens_[white_ ? 0 : 1] = -1;
+    }
     applyPiece(*parsed);
     if (parsed->duck >= 0) duck_ = parsed->duck;
     fullmove_ += !white_;
@@ -302,23 +337,25 @@ void DuckPosition::play(std::string_view move) {
     history_.push_back(repetitionKey());
 }
 
-std::string DuckPosition::repetitionKey() const {
+std::string KingCapturePosition::repetitionKey() const {
     auto fen = getFen(false);
     bool possible_ep = false;
     if (ep_ >= 0 && ep_ != duck_) {
         for (int from = 0; from < 64; ++from) {
-            if (lower(squares_[from]) == 'p' && pieceLegal({from, ep_, -1, 0})) { possible_ep = true; break; }
+            if (lower(squares_[from]) == 'p' && pawnMove({from, ep_, -1, 0}) &&
+                pieceLegal({from, ep_, -1, 0})) { possible_ep = true; break; }
         }
     }
     if (!possible_ep) fen.replace(fen.find_last_of(' ') + 1, std::string::npos, "-");
+    if (secret_queen_) fen += " " + std::to_string(queens_[0]) + " " + std::to_string(queens_[1]);
     return fen;
 }
 
-bool DuckPosition::hasMove() const {
+bool KingCapturePosition::hasMove() const {
     for (int from = 0; from < 64; ++from) {
         if (!squares_[from] || whitePiece(squares_[from]) != white_) continue;
         for (int to = 0; to < 64; ++to) {
-            DuckTurn move{from, to, -1, 0};
+            VariantMove move{from, to, -1, 0};
             if (lower(squares_[from]) == 'p' && to / 8 == (white_ ? 7 : 0)) move.promotion = 'q';
             if (pieceLegal(move)) return true;
         }
@@ -326,18 +363,18 @@ bool DuckPosition::hasMove() const {
     return false;
 }
 
-std::pair<chess::GameResultReason, chess::GameResult> DuckPosition::isGameOver() const {
+std::pair<chess::GameResultReason, chess::GameResult> KingCapturePosition::isGameOver() const {
     using Reason = chess::GameResultReason;
     using Result = chess::GameResult;
     if (std::find(squares_.begin(), squares_.end(), white_ ? 'K' : 'k') == squares_.end()) return {Reason::CHECKMATE, Result::LOSE};
     if (std::find(squares_.begin(), squares_.end(), white_ ? 'k' : 'K') == squares_.end()) return {Reason::CHECKMATE, Result::WIN};
-    if (!hasMove()) return {Reason::STALEMATE, Result::WIN};
+    if (!hasMove()) return {Reason::STALEMATE, secret_queen_ ? Result::DRAW : Result::WIN};
     if (halfmove_ >= 100) return {Reason::FIFTY_MOVE_RULE, Result::DRAW};
     if (std::count(history_.begin(), history_.end(), repetitionKey()) >= 3) return {Reason::THREEFOLD_REPETITION, Result::DRAW};
     return {Reason::NONE, Result::NONE};
 }
 
-std::string DuckPosition::san(const DuckTurn& move, bool long_notation) const {
+std::string KingCapturePosition::san(const VariantMove& move, bool long_notation) const {
     const char type = lower(squares_[move.from]);
     std::string result;
     const int castle = castlingIndex(move);
@@ -373,13 +410,13 @@ std::string DuckPosition::san(const DuckTurn& move, bool long_notation) const {
     return result;
 }
 
-std::string DuckPosition::notation(std::string_view move, NotationType type) const {
+std::string KingCapturePosition::notation(std::string_view move, NotationType type) const {
     const auto parsed = parseTurn(move);
-    if (!parsed || !isLegal(*parsed)) throw std::invalid_argument("Invalid Duck Chess move notation");
-    return type == NotationType::UCI ? toUci(*parsed) : san(*parsed, type == NotationType::LAN);
+    if (!parsed || !isLegal(*parsed)) throw std::invalid_argument("Invalid variant move notation");
+    return secret_queen_ || type == NotationType::UCI ? toUci(*parsed) : san(*parsed, type == NotationType::LAN);
 }
 
-std::string DuckPosition::parseNotation(std::string_view text) const {
+std::string KingCapturePosition::parseNotation(std::string_view text) const {
     std::string move(text);
     while (!move.empty() && (move.back() == '!' || move.back() == '?')) move.pop_back();
     if (isLegal(move)) return move;
@@ -390,13 +427,13 @@ std::string DuckPosition::parseNotation(std::string_view text) const {
         duck = square(std::string_view(move).substr(at + 1));
         if (duck < 0) throw std::invalid_argument("Invalid duck square in PGN");
     }
-    std::optional<DuckTurn> found;
+    std::optional<VariantMove> found;
     for (int from = 0; from < 64; ++from) {
         if (!squares_[from] || whitePiece(squares_[from]) != white_) continue;
         for (int to = 0; to < 64; ++to) {
             const bool promotion = lower(squares_[from]) == 'p' && to / 8 == (white_ ? 7 : 0);
             for (char p : promotion ? std::string("nbrq") : std::string(1, '\0')) {
-                DuckTurn turn{from, to, duck, p};
+                VariantMove turn{from, to, duck, p};
                 if (!isLegal(turn)) continue;
                 if (san(turn, false) != move && san(turn, true) != move) continue;
                 if (found) throw std::invalid_argument("Ambiguous Duck Chess PGN move");
@@ -409,7 +446,7 @@ std::string DuckPosition::parseNotation(std::string_view text) const {
 }
 
 bool Position::isLegal(std::string_view move) const {
-    if (isDuck()) return duck_->isLegal(move);
+    if (isKingCapture()) return capture_->isLegal(move);
     if (!chess::uci::isUciMove(move)) return false;
     const auto parsed = chess::uci::uciToMove(chess_, move);
     chess::Movelist moves;
@@ -418,12 +455,12 @@ bool Position::isLegal(std::string_view move) const {
 }
 
 void Position::play(std::string_view move) {
-    if (isDuck()) duck_->play(move);
+    if (isKingCapture()) capture_->play(move);
     else chess_.makeMove<true>(chess::uci::uciToMove(chess_, move));
 }
 
 std::string Position::notation(std::string_view move, NotationType type) const {
-    if (isDuck()) return duck_->notation(move, type);
+    if (isKingCapture()) return capture_->notation(move, type);
     const auto parsed = chess::uci::uciToMove(chess_, move);
     if (type == NotationType::SAN) return chess::uci::moveToSan(chess_, parsed);
     if (type == NotationType::LAN) return chess::uci::moveToLan(chess_, parsed);
@@ -431,7 +468,7 @@ std::string Position::notation(std::string_view move, NotationType type) const {
 }
 
 std::string Position::parseNotation(std::string_view move) const {
-    if (isDuck()) return duck_->parseNotation(move);
+    if (isKingCapture()) return capture_->parseNotation(move);
     return chess::uci::moveToUci(chess::uci::parseSan(chess_, move), chess_.chess960());
 }
 

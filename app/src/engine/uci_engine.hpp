@@ -38,6 +38,7 @@ struct UciInfo {
     std::optional<int64_t> hashfull;
     std::optional<int64_t> multipv;
     std::vector<std::string> pv;
+    std::string secret_queen;
     bool lowerbound = false;
     bool upperbound = false;
 
@@ -76,7 +77,8 @@ class UciEngine {
     [[nodiscard]] process::Result isready(std::optional<ms> threshold = std::nullopt);
 
     // Sends "position" to the engine and waits for a response.
-    [[nodiscard]] bool position(const std::vector<std::string_view>& moves, const std::string& fen);
+    [[nodiscard]] bool position(const std::vector<std::string_view>& moves, const std::string& fen,
+                                std::string_view secret_queen = {});
 
     [[nodiscard]] bool go(const TimeControl& our_tc, const TimeControl& enemy_tc, chess::Color stm);
 

@@ -100,7 +100,8 @@ process::Result UciEngine::isready(std::optional<std::chrono::milliseconds> thre
     return res;
 }
 
-bool UciEngine::position(const std::vector<std::string_view>& moves, const std::string& fen) {
+bool UciEngine::position(const std::vector<std::string_view>& moves, const std::string& fen,
+                         std::string_view secret_queen) {
     std::string command;
 
     if (fen == "startpos") {
@@ -108,6 +109,8 @@ bool UciEngine::position(const std::vector<std::string_view>& moves, const std::
     } else {
         command = fmt::format("position fen {}", fen);
     }
+
+    if (!secret_queen.empty()) fmt::format_to(std::back_inserter(command), " sq {}", secret_queen);
 
     if (!moves.empty()) {
         command += " moves";
@@ -369,6 +372,16 @@ bool UciEngine::refreshUci() {
         if (uci_options_.getOption("UCI_Chess960").has_value()) sendSetoption("UCI_Chess960", config_.variant == VariantType::DUCK960 ? "true" : "false");
     }
 
+    if (config_.variant == VariantType::SECRETQUEEN) {
+        const auto variant = uci_options_.getOption("UCI_Variant");
+        if (!variant.has_value() || !variant.value()->isValid("secretqueen")) {
+            Logger::print<Logger::Level::WARN>("Engine {} does not support UCI_Variant secretqueen", config_.name);
+            return false;
+        }
+        sendSetoption("UCI_Variant", "secretqueen");
+        if (uci_options_.getOption("UCI_Chess960").has_value()) sendSetoption("UCI_Chess960", "false");
+    }
+
     if (config_.variant == VariantType::FRC) {
         try {
             sendSetoption("UCI_Chess960", "true");
@@ -519,6 +532,8 @@ UciInfo UciEngine::parseInfo(std::string_view info_line) {
     for (size_t i = 0; i < tokens.size(); ++i) {
         const auto& token = tokens[i];
 
+        if (token == "string") break;
+
         if (token == "score") {
             if (i + 2 >= tokens.size()) {
                 result.score = tl::make_unexpected(std::string("Element 'score' has no type or value"));
@@ -560,9 +575,19 @@ UciInfo UciEngine::parseInfo(std::string_view info_line) {
             result.lowerbound = true;
         } else if (token == "upperbound") {
             result.upperbound = true;
+        } else if (token == "sq") {
+            while (i + 2 < tokens.size()) {
+                const auto& sq = tokens[i + 1];
+                if (sq != "captured" && (sq.size() != 2 || sq[0] < 'a' || sq[0] > 'h' || sq[1] < '1' || sq[1] > '8')) break;
+                const auto probability = str_utils::parseInteger<int>(tokens[i + 2]);
+                if (!probability || *probability < 0 || *probability > 1000) break;
+                if (!result.secret_queen.empty()) result.secret_queen += ' ';
+                result.secret_queen += sq + " " + std::to_string(*probability);
+                i += 2;
+            }
         } else if (token == "pv") {
-            for (++i; i < tokens.size() && (chess::uci::isUciMove(tokens[i]) || rules::DuckPosition::parseTurn(tokens[i]).has_value()); ++i) result.pv.push_back(tokens[i]);
-            break;
+            for (++i; i < tokens.size() && (chess::uci::isUciMove(tokens[i]) || rules::KingCapturePosition::parseTurn(tokens[i]).has_value()); ++i) result.pv.push_back(tokens[i]);
+            --i;
         }
     }
 

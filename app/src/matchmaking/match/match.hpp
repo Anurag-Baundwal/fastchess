@@ -186,6 +186,7 @@ class Match {
 
    private:
     void gameLoop(Player& first, Player& second);
+    bool chooseSecretQueen(Player& us, Player& them, chess::Color side);
 
     // returns the reason and the result of the game, different order than chess lib function
     [[nodiscard]] std::pair<chess::GameResultReason, chess::GameResult> isGameOver() const;

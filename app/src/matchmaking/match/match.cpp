@@ -279,6 +279,13 @@ Match::Match(const book::Opening& opening)
     }
 
     const auto fen = board_.getFen();
+    if (board_.isSecretQueen()) {
+        const auto placement = fen.substr(0, fen.find(' '));
+        if (placement.find('P') == std::string::npos || placement.find('p') == std::string::npos ||
+            placement.find('K') == std::string::npos || placement.find('k') == std::string::npos ||
+            !opening_.moves.empty() || !opening_.duck_moves.empty())
+            throw fastchess_exception("Secret Queen requires a starting FEN with both kings and at least one pawn per side, without book moves");
+    }
 
     data_           = MatchData(fen);
     start_position_ = fen == chess::constants::STARTPOS ? "startpos" : fen;
@@ -307,6 +314,17 @@ Match::Match(const book::Opening& opening)
 void Match::addMoveData(const Player& player, const std::string& move, int64_t measured_time_ms, int64_t latency,
                         int64_t timeleft, bool legal) {
     MoveData move_data;
+
+    if (board_.isSecretQueen()) {
+        const auto lines = player.engine.getStdoutLines();
+        for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
+            if ((*it)->line.rfind("info ", 0) != 0) continue;
+            const auto info = engine::UciEngine::parseInfo((*it)->line);
+            if (info.secret_queen.empty()) continue;
+            move_data.secret_queen = info.secret_queen;
+            break;
+        }
+    }
 
     move_data.move           = move;
     move_data.elapsed_millis = measured_time_ms;
@@ -410,6 +428,11 @@ void Match::start(engine::UciEngine& white, engine::UciEngine& black, std::optio
 
     const auto start = clock::now();
 
+    if (data_.termination == MatchTermination::None && board_.isSecretQueen()) {
+        if (chooseSecretQueen(white_player, black_player, Color::WHITE))
+            chooseSecretQueen(black_player, white_player, Color::BLACK);
+    }
+
     if (data_.termination == MatchTermination::None) {
         gameLoop(first, second);
     }
@@ -422,6 +445,46 @@ void Match::start(engine::UciEngine& white, engine::UciEngine& black, std::optio
     data_.duration = time::duration(chrono::duration_cast<chrono::seconds>(end - start));
 
     data_.players = GamePair(MatchData::PlayerInfo{white_player}, MatchData::PlayerInfo{black_player});
+}
+
+bool Match::chooseSecretQueen(Player& us, Player& them, Color side) {
+    if (atomic::stop.load()) {
+        data_.termination = MatchTermination::INTERRUPT;
+        data_.reason = INTERRUPTED_MSG;
+        return false;
+    }
+    const auto fail = [&](engine::process::Status status) {
+        if (status == engine::process::Status::TIMEOUT) setEngineStallStatus(us, them);
+        else setEngineCrashStatus(us, them);
+        if (!atomic::stop.load())
+            data_.reason = fmt::format("{} {} during secret queen selection", side.longStr(),
+                                      status == engine::process::Status::TIMEOUT ? "stalls" : "disconnects");
+        return false;
+    };
+    const auto ready = us.engine.isready(engine::UciEngine::getPingTime());
+    if (ready.code != engine::process::Status::OK) return fail(ready.code);
+    auto fen = data_.fen;
+    const auto side_at = fen.find(' ') + 1;
+    if (fen[side_at] != (side == Color::WHITE ? 'w' : 'b')) {
+        fen[side_at] = side == Color::WHITE ? 'w' : 'b';
+        const auto ep_at = fen.find(' ', side_at + 2) + 1;
+        fen.replace(ep_at, fen.find(' ', ep_at) - ep_at, "-");
+    }
+    if (!us.engine.position({}, fen == chess::constants::STARTPOS ? "startpos" : fen) ||
+        !us.engine.writeEngine("go choosequeen movetime 1000")) {
+        return fail(engine::process::Status::ERR);
+    }
+    const auto status = us.engine.readEngineLowLat("bestmove", std::chrono::milliseconds(1000) + engine::UciEngine::getPingTime());
+    if (!us.engine.isRealtimeLogging()) us.engine.writeLog();
+    if (status.code != engine::process::Status::OK) return fail(status.code);
+    const auto choice = us.engine.bestmove();
+    if (!choice || !board_.setSecretQueen(side, *choice)) {
+        setEngineIllegalMoveStatus(us, them, std::nullopt);
+        data_.reason = fmt::format("{} makes an invalid secret queen selection", side.longStr());
+        return false;
+    }
+    (side == Color::WHITE ? data_.secret_queens.white : data_.secret_queens.black) = *choice;
+    return true;
 }
 
 void Match::gameLoop(Player& first, Player& second) {
@@ -480,7 +543,7 @@ bool Match::playMove(Player& us, Player& them) {
 
     if (gameover.first != GameResultReason::NONE) {
         data_.termination = MatchTermination::NORMAL;
-        if (board_.isDuck() && gameover.first == GameResultReason::CHECKMATE) {
+        if (board_.isKingCapture() && gameover.first == GameResultReason::CHECKMATE) {
             const auto winner = gameover.second == GameResult::WIN ? board_.sideToMove() : ~board_.sideToMove();
             data_.reason = fmt::format("{} wins by king capture", winner.longStr());
         } else if (board_.isDuck() && gameover.first == GameResultReason::STALEMATE) {
@@ -505,7 +568,8 @@ bool Match::playMove(Player& us, Player& them) {
     if (!validConnection(us, them)) return false;
 
     // write new uci position
-    if (!us.engine.position(data_.getMoves(), start_position_)) {
+    const auto& secret_queen = board_.sideToMove() == Color::WHITE ? data_.secret_queens.white : data_.secret_queens.black;
+    if (!us.engine.position(data_.getMoves(), start_position_, secret_queen)) {
         setEngineCrashStatus(us, them);
         return false;
     }
@@ -619,7 +683,7 @@ bool Match::playMove(Player& us, Player& them) {
 
     maxmoves_tracker_.update();
 
-    if (!board_.isDuck()) checkMateScoreSignMismatch(them, us, board_.orthodox(), start_position_, data_);
+    if (!board_.isKingCapture()) checkMateScoreSignMismatch(them, us, board_.orthodox(), start_position_, data_);
 
     return true;
 }
@@ -725,6 +789,7 @@ void Match::setEngineIllegalMoveStatus(Player& loser, Player& winner, const std:
 }
 
 void Match::verifyPvLines(const Player& us, const std::string& best_move) {
+    if (board_.isSecretQueen()) return;
     const auto info_lines = us.engine.getInfoLines();
     std::vector<std::pair<const std::string*, engine::UciInfo>> parsed_lines;
     parsed_lines.reserve(info_lines.size());
@@ -785,7 +850,7 @@ void Match::verifyPvLines(const Player& us, const std::string& best_move) {
 bool Match::adjudicate(Player& us, Player& them) noexcept {
     // Start with TB adjudication, if applicable, since this provides a sort of 'exact' result, whereas the other
     // adjudication methods are more heuristic.
-    if (config::TournamentConfig->tb_adjudication.enabled && !board_.isDuck() && tb_adjudication_tracker_.adjudicatable(board_.orthodox())) {
+    if (config::TournamentConfig->tb_adjudication.enabled && !board_.isKingCapture() && tb_adjudication_tracker_.adjudicatable(board_.orthodox())) {
         const GameResult result = tb_adjudication_tracker_.adjudicate(board_.orthodox());
         const auto desired_adju = config::TournamentConfig->tb_adjudication.result_type;
 

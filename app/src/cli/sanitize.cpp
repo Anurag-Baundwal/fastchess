@@ -106,6 +106,15 @@ void validateConfig(config::Tournament& config) {
         throw fastchess_exception("Error: Syzygy adjudication is not supported for Duck Chess.");
     }
 
+    if (config.variant == VariantType::SECRETQUEEN) {
+        if (config.tb_adjudication.enabled)
+            throw fastchess_exception("Error: Syzygy adjudication is not supported for Secret Queen.");
+        if (!config.opening.file.empty() && config.opening.format == FormatType::PGN)
+            throw fastchess_exception("Error: Secret Queen openings must be FEN/EPD positions, without preselected queens or book moves.");
+        if (!config.epd.file.empty())
+            throw fastchess_exception("Error: Use PGN output for Secret Queen to preserve the selections and move history.");
+    }
+
     if (config.tb_adjudication.enabled) {
         if (config.tb_adjudication.syzygy_dirs.empty()) {
             throw fastchess_exception("Error: Must provide a ;-separated list of Syzygy tablebase directories.");

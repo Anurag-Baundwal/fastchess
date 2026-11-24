@@ -31,6 +31,7 @@ struct MoveData {
     std::vector<std::string> additional_lines;
     std::string move;
     std::string pv = "";
+    std::string secret_queen;
 
     uint64_t nodes  = 0;
     uint64_t nps    = 0;
@@ -117,6 +118,7 @@ struct MatchData {
     std::string duration;
     std::string date;
     std::string fen;
+    GamePair<std::string, std::string> secret_queens;
 
     // This reason will be printed on the console and will be written to the
     // pgn file as a comment at the end of the game.

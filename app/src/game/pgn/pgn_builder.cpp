@@ -66,6 +66,13 @@ PgnBuilder::PgnBuilder(const config::Pgn& pgn_config, const MatchData& match, st
         pgn_generator_.addHeader("VariantRules", "duck1");
     }
 
+    if (match.variant == VariantType::SECRETQUEEN) {
+        pgn_generator_.addHeader("Variant", "SecretQueen");
+        pgn_generator_.addHeader("VariantRules", "secretqueen1");
+        pgn_generator_.addHeader("WhiteSecretQueen", match.secret_queens.white);
+        pgn_generator_.addHeader("BlackSecretQueen", match.secret_queens.black);
+    }
+
     if (!pgn_config_.min) {
         pgn_generator_.addHeader("GameDuration", match_.duration);
         pgn_generator_.addHeader("GameStartTime", match_.start_time);
@@ -99,6 +106,10 @@ PgnBuilder::PgnBuilder(const config::Pgn& pgn_config, const MatchData& match, st
 
     rules::Position board(match.variant);
     board.setFen(match_.fen);
+    if (board.isSecretQueen()) {
+        board.setSecretQueen(chess::Color::WHITE, match_.secret_queens.white);
+        board.setSecretQueen(chess::Color::BLACK, match_.secret_queens.black);
+    }
 
     const std::size_t move_number = int(board.sideToMove() == chess::Color::BLACK) + 2 * board.fullMoveNumber() - 1;
 
@@ -124,7 +135,8 @@ PgnBuilder::PgnBuilder(const config::Pgn& pgn_config, const MatchData& match, st
 }
 
 std::optional<Opening> PgnBuilder::getOpeningClassification(bool is_frc_variant) const {
-    if (match_.variant == VariantType::DUCK || match_.variant == VariantType::DUCK960) return std::nullopt;
+    if (match_.variant == VariantType::DUCK || match_.variant == VariantType::DUCK960 ||
+        match_.variant == VariantType::SECRETQUEEN) return std::nullopt;
 
     chess::Board opening_board;
     opening_board.set960(is_frc_variant);
@@ -186,6 +198,7 @@ std::string PgnBuilder::createComment(const MoveData& move, const MoveData& next
                           pgn_config_.track_hashfull ? fmt::format("hashfull={}", move.hashfull) : "",
                           pgn_config_.track_tbhits ? fmt::format("tbhits={}", move.tbhits) : "",
                           pgn_config_.track_pv ? fmt::format("pv=\"{}\"", move.pv) : "",
+                          move.secret_queen.empty() ? "" : fmt::format("sq=\"{}\"", move.secret_queen),
                           info_lines.empty() ? "" : info_lines,  //
                           last ? match_str : ""                  //
         );
