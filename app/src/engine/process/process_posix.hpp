@@ -393,7 +393,18 @@ class Process : public IProcess {
 
             fa.add_workdir(wd_);
 
-            const int rc = spawn_func(&process_pid_, command_.c_str(), &fa.actions, nullptr, execv_argv, environ);
+            // Android's libc spawns with fork() when there are file actions. A forked child gets
+            // the locks other threads held at that moment, still locked, and on Termux the exec
+            // runs code (termux-exec) that can wait on one of them forever, so that engine never
+            // starts. A vfork() child shares the parent's memory and only waits until the lock
+            // is released. glibc and musl ignore the flag, as they always spawn this way
+            posix_spawnattr_t attr;
+            posix_spawnattr_init(&attr);
+#    ifdef POSIX_SPAWN_USEVFORK
+            posix_spawnattr_setflags(&attr, POSIX_SPAWN_USEVFORK);
+#    endif
+            const int rc = spawn_func(&process_pid_, command_.c_str(), &fa.actions, &attr, execv_argv, environ);
+            posix_spawnattr_destroy(&attr);
             if (rc != 0) {
                 throw fastchess_exception::format("posix_spawn failed: {}", std::strerror(rc));
             }
